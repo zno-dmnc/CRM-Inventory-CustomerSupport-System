@@ -1,0 +1,185 @@
+User Service //localhost:3001
+    - Register /register
+        {
+            "name": "John Doe",
+            "phone": "1234567890",
+            "address": "New York",
+            "user_type": "admin",
+            "email": "john@gmail.com",
+            "password": "john123"
+        }
+    - Login /login
+        {
+            "email": "john@gmail.com",
+            "password": "john123"
+        }
+    - Update User /users/:id
+        {
+            "name": "Luigi Mangione",
+            "phone": "1234567890",
+            "address": "New York",
+            "password": "john123"
+        }
+    - Delete User /users/id
+    - Get User by Id /users/id
+    - Get All Users /users
+
+
+
+Product Service //localhost:3002
+    - Add Product /addproduct
+        {
+            "name": "product1",
+            "description": "product1 description",
+            "price": 100
+        }
+    - Update product /products/:id
+        {
+            "name": "product3",
+            "description": "product3 description",
+            "price": 1200
+        }
+    - Delete Product /products/:id
+    - Get Product by Id /products/:id
+    - Get All Products /products
+
+Order Service //localhost:3003
+    - Add Order /addorder
+        {
+            "supplier_id": 1,
+            "product_id": 2,
+            "order_quantity": 10,
+        }
+    - Update Order /orders/:id
+        {
+            "supplier_id": 1,
+            "product_id": 1,
+            "order_quantity": 100
+        }
+    - Delete Order /orders/:id
+    - Get Order by Id /orders/:id
+    - Get All Orders /orders
+
+Inventory Service //localhost:3004
+    - Add Inventory /addinventory
+        {
+            "product_id": 1,
+            "quantity": 100
+        }
+    - Update Inventory /inventory/:id
+        {
+            "product_id": 1,
+            "quantity": 100,
+            "minimum_quantity": 5
+        }
+    - Delete Inventory /inventory/:id
+    - Get Inventory by Id /inventory/:id
+    - Get All Inventory /inventory
+    - Get Inventory by Product Id /inventory/product/:id
+    //to add inventory, add product first, then place order to determine quantity
+    //inventory is called by many services. 
+
+Sales Service //localhost:3005
+    - Add Sale /addsale
+        {
+            "user_id": 1,
+            "product_id": 1,
+            "quantity": 100,
+        }
+    - Update Sale /sale
+        {
+            "quantity": 200
+        }
+        //quantity can be the only thing updated on the sale
+    - Delete Sale /sale/:id
+    - Get Sale by Id /sales/:id
+    - Get All Sales /sales
+
+Ticket Service //localhost:3006
+    - Create Ticket Request /createrequest
+        {
+            "user_id": 4,
+          "support_id": null,
+            "subject": "subject1",
+            "description": "description1",
+            "status": "pending",
+            "priority": "tbd"
+        }
+        //request is done first. no communications can be done if status is pending
+    - Create Ticket /createTicket/:id
+        {
+            "user_id":4 ,
+            "support_id": 3,
+            "subject": "subject1",
+            "description": "description1",
+            "status": "open", //default. do not change
+            "priority": "medium"
+        }
+        //this is a put request. this request updates the status, priority, and support_id
+    - Close Ticket /closeticket/:id
+        //this is a put request. this closes the request and stops communications from coming
+    - Update Ticket /updateticket/:id
+        {
+            "user_id":4 ,
+             "support_id": 3,
+            "subject": "subject1",
+            "description": "description1",
+            "status": "open",
+            "priority": "medium"
+        }
+    - Delete Ticket /deleteticket/:id
+    - Get Ticket by Id /tickets/:id
+    - Get All Tickets /tickets
+
+Communication Service //localhost:3007
+    - Add Communication /addcomms
+        {
+            "ticket_id": 1,
+            "user_id": 1,
+            "message": "Hello"
+        }
+        //checks the ticket if the the user who sent it is in either "support_id" or "user_id"
+        //can only send messages if ticket is open
+    - Update Communication /comms/:id
+        {
+            "message": "Hello World"
+        }
+        //message is the only field to be updated
+    - Delete Communication /comms/:id
+    - Get Communication by Id /comms/:id
+    - Get All Communications /comms
+    - Get Communications by Ticket Id /comms/:id
+
+
+System Flow
+    - Create Accounts
+        - customer account
+        - supplier account
+        - support account
+
+    - Add Product
+    
+    - Order Products
+        - make an order, using the product id
+        - supplier id should only be users that has the user_type "supplier"
+        - products go to inventory after ordering
+    
+    - Sales
+        - make a sale
+        - sale is invalid if:
+            - user is non-existent
+            - quantity of sale exceeds quantity in the inventory
+        - total price is directly reflected
+        - updating of sale also updates the total price, and inventory quantity
+
+    Tickets
+        - tickets need to be requested first, where support_id is null, status is pending, as it still needs checking, and priority is just tbd. 
+        - creating tickets is just an update of the ticket. 
+            - support_id is inputted by a support account
+            - status is set to open
+            - priority is based on the subject and description        
+    
+    Communication   
+        - Make a communication
+        - the id of the sender is inputted, be it user or support id
+        - if user_id or support_id is neither in the ticket, the communication is not sent
