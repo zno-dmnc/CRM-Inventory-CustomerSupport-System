@@ -165,7 +165,7 @@ app.get('/all', authenticateToken, rateLimit, authPage(["admin"]), async (req, r
     }
 });
 
-app.get('/sales/:id', authenticateToken, rateLimit, authPage(["admin", "customer"]), async (req, res) => {
+app.get('/sale/:id', authenticateToken, rateLimit, authPage(["admin", "customer"]), async (req, res) => {
     const id = req.params.id;
     const token = req.headers.authorization;
 
@@ -177,8 +177,8 @@ app.get('/sales/:id', authenticateToken, rateLimit, authPage(["admin", "customer
 
         const headers = { Authorization: token };
         const sale = await Sales.findByPk(id);
-        const product = await axios.get(`https://localhost:3002/products/${sale.product_id}`, { headers });
-        const user = await axios.get(`https://localhost:3001/users/${sale.user_id}`, { headers });
+        const product = await axios.get(`https://localhost:3002/product/${sale.product_id}`, { headers, httpsAgent });
+        const user = await axios.get(`https://localhost:3001/user/${sale.user_id}`, { headers, httpsAgent });
         sale.dataValues.product = product.data;
         sale.dataValues.user = user.data;
 
@@ -192,7 +192,7 @@ app.get('/sales/:id', authenticateToken, rateLimit, authPage(["admin", "customer
 
 app.put('/sale/:id', authenticateToken, rateLimit, authPage(["admin", "customer"]), validateSaleEdit, checkValidationResults, async (req, res) => {
     const saleId = req.params.id;
-    const newQuantity = req.body.quantity;
+    const newQuantity = parseInt(req.body.quantity);
     const token = req.headers.authorization;
 
     try {
@@ -208,7 +208,7 @@ app.put('/sale/:id', authenticateToken, rateLimit, authPage(["admin", "customer"
             return res.status(404).send('Sale not found');
         }
 
-        const getinventory = await axios.get(`https://localhost:3004/inventory/product/${sale.product_id}`, { headers });
+        const getinventory = await axios.get(`https://localhost:3004/inventory/product/${sale.product_id}`, { headers, httpsAgent });
         const inventory = getinventory.data.inventory;
         if (!inventory) {
             logger.warn('Product not found in inventory.');
@@ -225,9 +225,9 @@ app.put('/sale/:id', authenticateToken, rateLimit, authPage(["admin", "customer"
             product_id: inventory.product_id,
             quantity: inventory.quantity - quantityDifference,
             minimum_quantity: inventory.minimum_quantity
-        }, { headers });
+        }, { headers, httpsAgent });
 
-        const product = await axios.get(`https://localhost:3002/products/${sale.product_id}`, { headers });
+        const product = await axios.get(`https://localhost:3002/product/${sale.product_id}`, { headers, httpsAgent });
         if (!product.data) {
             logger.warn('Product not found.');
             return res.status(404).send('Product not found');
@@ -268,7 +268,7 @@ app.delete('/sale/:id', authenticateToken, rateLimit, authPage(["admin", "custom
         }
 
         // Fetch the inventory record
-        const getinventory = await axios.get(`https://localhost:3004/inventory/product/${sale.product_id}`, { headers });
+        const getinventory = await axios.get(`https://localhost:3004/inventory/product/${sale.product_id}`, { headers, httpsAgent });
         const inventory = getinventory.data.inventory;
         if (!inventory) {
             logger.warn('Product not found in inventory.');
@@ -280,7 +280,7 @@ app.delete('/sale/:id', authenticateToken, rateLimit, authPage(["admin", "custom
             product_id: inventory.product_id,
             quantity: inventory.quantity + sale.quantity,
             minimum_quantity: inventory.minimum_quantity
-        }, { headers });
+        }, { headers, httpsAgent });
 
         // Delete the sale record
         await sale.destroy();

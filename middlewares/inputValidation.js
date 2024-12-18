@@ -40,13 +40,12 @@ const validateProductInput = [
 ];
 
 const validateProductEditInput = [
-    body('price').optional().trim().escape()
-        .isFloat().withMessage('Product price must be an integer'),
-    body('name').optional().isEmail().trim().escape(),
-    body('description').optional().trim().escape(),
+    body('name').isString().isLength({ min: 3 }).withMessage('Name must be at least 3 characters long.'),
+    body('description').optional().isString(),
+    body('price').optional().isFloat({ min: 0 }).withMessage('Price must be a positive number.'),
     // Custom validation to ensure at least one field is provided
     body().custom((value, { req }) => {
-        const fields = ['name', 'phone', 'price', 'description'];
+        const fields = ['name', 'price', 'description'];
         const isAnyFieldProvided = fields.some(field => req.body[field]);
         if (!isAnyFieldProvided) {
             throw new Error('At least one field must be provided for update.');

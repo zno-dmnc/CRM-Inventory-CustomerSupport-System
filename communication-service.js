@@ -73,7 +73,7 @@ sequelize.sync({ force: false })
 // Morgan for request logging
 app.use(morgan('combined', { stream: fs.createWriteStream(path.join(__dirname, 'logs/access.log'), { flags: 'a' }) }));
 
-// Middleware for logging errors and unauthorized access
+// Middleware for logging errors and unauthorized access 
 app.use((req, res, next) => {
     logger.info(`Request: ${req.method} ${req.url} - IP: ${req.ip}`);
     next();

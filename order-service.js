@@ -152,8 +152,8 @@ app.get('/order/:id', authenticateToken, rateLimit, authPage(["admin", "supplier
             return res.status(404).send('Order not found');
         }
 
-        const product = await axios.get(`https://localhost:3002/products/${order.product_id}`, { headers, httpsAgent });
-        const supplier = await axios.get(`https://localhost:3001/users/${order.supplier_id}`, { headers, httpsAgent });
+        const product = await axios.get(`https://localhost:3002/product/${order.product_id}`, { headers, httpsAgent });
+        const supplier = await axios.get(`https://localhost:3001/user/${order.supplier_id}`, { headers, httpsAgent });
 
         order.dataValues.product = product.data;
         order.dataValues.supplier = supplier.data;
@@ -184,12 +184,12 @@ app.put('/order/:id', authenticateToken, rateLimit, authPage(["admin", "supplier
         }
 
         const headers = { Authorization: token };
-        const supplier = await axios.get(`https://localhost:3001/users/${orderObj.supplier_id}`, { headers, httpsAgent });
+        const supplier = await axios.get(`https://localhost:3001/user/${orderObj.supplier_id}`, { headers, httpsAgent });
         if (!supplier.data) {
             logger.warn(`Supplier with ID ${orderObj.supplier_id} not found`);
             return res.status(400).json({ message: 'Supplier not found' });
         }
-        const product = await axios.get(`https://localhost:3002/products/${orderObj.product_id}`, { headers, httpsAgent });
+        const product = await axios.get(`https://localhost:3002/product/${orderObj.product_id}`, { headers, httpsAgent });
         if (!product.data) {
             logger.warn(`Product with ID ${orderObj.product_id} not found`);
             return res.status(400).json({ message: 'Product not found' });
@@ -200,7 +200,7 @@ app.put('/order/:id', authenticateToken, rateLimit, authPage(["admin", "supplier
             if (orderObj.supplier_id) order.supplier_id = orderObj.supplier_id;
             if (orderObj.product_id) order.product_id = orderObj.product_id;
             if (orderObj.order_quantity) order.order_quantity = orderObj.order_quantity;
-
+            
             await order.save();
             logger.info(`Order with ID ${id} updated: ${JSON.stringify(order)}`);
             res.status(200).json(order);

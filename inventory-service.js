@@ -131,7 +131,7 @@ app.get('/inventory/:id', authenticateToken, rateLimit, authPage(["admin", "supp
         };
 
         const inventory = await Inventory.findByPk(id);
-        const product = await axios.get(`https://localhost:3002/products/${inventory.product_id}`, { headers, httpsAgent });
+        const product = await axios.get(`https://localhost:3002/product/${inventory.product_id}`, { headers, httpsAgent });
         inventory.dataValues.product = product.data;
         logger.info('Inventory retrieved successfully', inventory);
         res.status(200).json({ inventory: inventory.dataValues });

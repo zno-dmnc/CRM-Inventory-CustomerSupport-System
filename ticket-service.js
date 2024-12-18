@@ -89,7 +89,7 @@ app.use((req, res, next) => {
     next();
 });
 
-app.post('/createrequest', authenticateToken, rateLimit, authPage(["admin", "customer"]), validateTicketInput, checkValidationResults, async (req, res) => {
+app.post('/createrequest', authenticateToken, rateLimit, validateTicketInput, checkValidationResults, async (req, res) => {
     logger.info('Creating a new ticket request');
     const requestObj = ({
         user_id: req.body.user_id,
