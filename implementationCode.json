@@ -1,0 +1,66 @@
+{
+    "admin_user": {
+      "name": "Godwin Monserate",
+      "phone": "092216592",
+      "address": "Cebu City",
+      "user_type": "admin",
+      "email": "godwin@gmail.com",
+      "password": "godwin123"
+    },
+    "agent_user": {
+      "name": "Adrian Jabonero",
+      "phone": "092316512",
+      "address": "Cebu City",
+      "user_type": "agent",
+      "email": "adrian@gmail.com",
+      "password": "adrian123"
+    },
+    "supplier_user": {
+      "name": "Wooden Things Inc.",
+      "phone": "032659541",
+      "address": "Mabolo",
+      "user_type": "supplier",
+      "email": "wooden@gmail.com",
+      "password": "wooden123"
+    },
+    "product": {
+      "name": "Green Table",
+      "description": "1-legged wooden table",
+      "price": 780
+    },
+    "order": {
+      "supplier_id": 7,
+      "product_id": 3,
+      "order_quantity": 65
+    },
+    "purchase": {
+      "user_id": 8,
+      "product_id": 3,
+      "quantity": 2
+    },
+    "support_ticket": {
+      "user_id": 8,
+      "subject": "Defective Item",
+      "description": "The table has holes in them"
+    },
+    "ticket_acceptance": {
+      "user_id": 8,
+      "support_id": 6,
+      "subject": "Defective Item",
+      "description": "The table has holes in them",
+      "priority": "High"
+    },
+    "communications": [
+      {
+        "ticket_id": 3,
+        "user_id": 6,
+        "message": "Hello, how may I help you"
+      },
+      {
+        "ticket_id": 3,
+        "user_id": 8,
+        "message": "About the damage on the item, can I ask for a refund"
+      }
+    ]
+  }
+  
