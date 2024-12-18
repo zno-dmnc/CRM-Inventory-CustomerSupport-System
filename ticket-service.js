@@ -8,6 +8,25 @@ app.use(express.json());
 //to download
 //http proxy middleware
 
+const https = require('https');
+const path = require('path');
+const fs = require('fs');
+const authenticateToken = require('../CRM-Inventory-CustomerSupport-System/middlewares/authMiddleware')
+const rateLimit = require('../CRM-Inventory-CustomerSupport-System/middlewares/rateLimiterMiddleware')
+const authPage = require('../CRM-Inventory-CustomerSupport-System/middlewares/rbacMiddleware')
+const { validateTicketInput, validateTicketEdit, validateTicketUpdate, checkValidationResults } = require('../CRM-Inventory-CustomerSupport-System/middlewares/inputValidation');
+const logger = require('../CRM-Inventory-CustomerSupport-System/middlewares/logger');
+const morgan = require('morgan')
+
+const httpsAgent = new https.Agent({
+    rejectUnauthorized: false, // Allow self-signed certificates
+});
+
+const sslServer = https.createServer({
+    key: fs.readFileSync(path.join(__dirname, 'cert', 'key.pem')),
+    cert: fs.readFileSync(path.join(__dirname, 'cert', 'cert.pem')),
+}, app)
+
 const sequelize = new Sequelize('CRM', 'root', 'root', {
     host: 'localhost',
     dialect: 'mysql'
@@ -61,9 +80,17 @@ sequelize.sync({ force: false })
     })
     .catch(error => {'Unable to connect to the database:', error});
 
+// Morgan for request logging
+app.use(morgan('combined', { stream: fs.createWriteStream(path.join(__dirname, 'logs/access.log'), { flags: 'a' }) }));
 
+// Middleware for logging errors and unauthorized access
+app.use((req, res, next) => {
+    logger.info(`Request: ${req.method} ${req.url} - IP: ${req.ip}`);
+    next();
+});
 
-app.post('/createrequest', async (req, res) => {
+app.post('/createrequest', authenticateToken, rateLimit, authPage(["admin", "customer"]), validateTicketInput, checkValidationResults, async (req, res) => {
+    logger.info('Creating a new ticket request');
     const requestObj = ({
         user_id: req.body.user_id,
         support_id: null,
@@ -71,177 +98,170 @@ app.post('/createrequest', async (req, res) => {
         description: req.body.description,
         status: "pending",
         priority: "tbd"
-    })
-    //json data
-    // {
-    //     "user_id": 4,
-    //   "support_id": null,
-    //     "subject": "subject1",
-    //     "description": "description1",
-    //     "status": "pending",
-    //     "priority": "tbd"
-    // }
-    //check if user exists
-    const user = await axios.get(`http://localhost:3001/users/${requestObj.user_id}`)
-    if (!user) {
-        return res.status(400).json({ error: 'User not found' });
-    }
-    //check user_type
-    if (user.data.user_type !== 'customer') {
-        return res.status(400).json({ error: 'Only customers can request tickets' });
+    });
+    const token = req.headers.authorization;
+    if (!token) {
+        logger.error('Authorization token is missing');
+        return res.status(401).json({ error: 'Authorization token is missing' });
     }
 
+    const headers = {
+        Authorization: token,
+    };
+    
     try {
+        const user = await axios.get(`https://localhost:3001/user/${requestObj.user_id}`, { headers, httpsAgent })
+        if (!user) {
+            logger.error('User not found');
+            return res.status(400).json({ error: 'User not found' });
+        }
+        if (user.data.user_type !== 'customer') {
+            logger.error('Only customers can request tickets');
+            return res.status(400).json({ error: 'Only customers can request tickets' });
+        }
+
         const ticket = await Ticket.create(requestObj);
+        logger.info('Ticket created successfully');
         res.status(200).json(ticket);
     } catch (error) {
+        logger.error(`Error creating ticket: ${error.message}`);
         res.status(400).json(error);
     }
 });
 
-app.get('/tickets', async (req, res) => {
+app.get('/all', authenticateToken, rateLimit, authPage(["admin", "agent"]), async (req, res) => {
+    logger.info('Fetching all tickets');
     try {
         const tickets = await Ticket.findAll();
         return res.status(200).json(tickets);
     } catch (error) {
+        logger.error(`Error fetching tickets: ${error.message}`);
         return res.status(400).json(error);
     }
 });
 
-app.get('/tickets/:id', async (req, res) => {
+app.get('/ticket/:id', authenticateToken, rateLimit, authPage(["admin", "agent", "customer"]), async (req, res) => {
     const id = req.params.id;
+    logger.info(`Fetching ticket with ID: ${id}`);
     try {
         const ticket = await Ticket.findByPk(id);
         return res.status(200).json(ticket);
     } catch (error) {
+        logger.error(`Error fetching ticket: ${error.message}`);
         return res.status(400).json(error);
     }
 });
 
 
-
-app.put('/createTicket/:id', async (req, res) => {
+app.put('/createTicket/:id', authenticateToken, rateLimit, authPage(["admin", "customer"]), validateTicketEdit, checkValidationResults, async (req, res) => {
     const id = req.params.id;
-    //json data
-    //creating ticket should only change the status to open
-    //set the priority based on subject and description
-    //input support id
-    //only admin or support can create ticket
-    // {
-    //     "user_id":4 ,
-    //      "support_id": 3,
-    //     "subject": "subject1",
-    //     "description": "description1",
-    //     "status": "open",
-    //     "priority": "medium"
-    // }
+    logger.info(`Creating or updating ticket with ID: ${id}`);
 
     try {
-
         const getticket = await Ticket.findByPk(id);
         if (!getticket) {
+            logger.error('Ticket not found');
             return res.status(400).json({ error: 'Ticket not found' });
         }
+
         if (getticket.status !== 'pending') {
+            logger.error('Ticket already created');
             return res.status(400).json({ error: 'Ticket already created' });
         }
-        const ticketObj = ({
+
+        // Updated ticket object
+        const ticketObj = {
             user_id: req.body.user_id,
             support_id: req.body.support_id,
             subject: req.body.subject,
             description: req.body.description,
             status: 'open',
-            priority: 'medium'
-        });
+            priority: req.body.priority
+        };
 
-
-
-
-
-        const ticket = await Ticket.create(ticketObj);
-        res.status(200).json(ticket);
+        // Update the ticket
+        const updatedTicket = await getticket.update(ticketObj);
+        logger.info('Ticket updated successfully');
+        res.status(200).json(updatedTicket);
     } catch (error) {
-        res.status(400).json(error);
+        logger.error(`Error creating ticket: ${error.message}`);
+        res.status(400).json({ error: error.message });
     }
 });
 
-app.put('/closeticket/:id', async (req, res) => {
-    const id = req.params.id;
 
+
+app.put('/closeticket/:id', authenticateToken, rateLimit, authPage(["admin", "agent"]), async (req, res) => {
+    const id = req.params.id;
+    logger.info(`Closing ticket with ID: ${id}`);
     try {
         const ticket = await Ticket.findByPk(id);
         if (ticket) {
-            ticket.status ="closed";
+            ticket.status = "closed";
             await ticket.save();
+            logger.info('Ticket closed successfully');
             return res.status(200).json(ticket);
         } else {
+            logger.error('Ticket not found');
             return res.status(400).send('Ticket not found');
         }
     } catch (error) {
+        logger.error(`Error closing ticket: ${error.message}`);
         return res.status(400).send(error);
     }
 });
 
-app.put('/updateticket/:id', async (req, res) => {
+app.put('/updateticket/:id', authenticateToken, rateLimit, authPage(["admin", "customer"]), validateTicketUpdate, checkValidationResults, async (req, res) => {
     const id = req.params.id;
-    //json data
-    // {
-    //     "user_id":4 ,
-    //      "support_id": 3,
-    //     "subject": "subject1",
-    //     "description": "description1",
-    //     "status": "open",
-    //     "priority": "medium"
-    // }
-
+    logger.info(`Updating ticket with ID: ${id}`);
     try {
         const ticket = await Ticket.findByPk(id);
         if (ticket) {
             ticket.user_id = req.body.user_id;
             ticket.support_id = req.body.support_id;
-            ticket.subject = req.body.subject;
-            ticket.description = req.body.description;
             ticket.status = req.body.status;
             ticket.priority = req.body.priority;
 
+            if(req.body.subject){
+                ticket.subject = req.body.subject;
+            }
+            if(req.body.description){
+                ticket.description = req.body.description;
+            }
+
             await ticket.save();
+            logger.info('Ticket updated successfully');
             return res.status(200).json(ticket);
         } else {
+            logger.error('Ticket not found');
             return res.status(400).send('Ticket not found');
         }
     } catch (error) {
+        logger.error(`Error updating ticket: ${error.message}`);
         return res.status(400).send(error);
     }
 });
 
-app.delete('/deleteticket/:id', async (req, res) => {
+app.delete('/deleteticket/:id', authenticateToken, rateLimit, authPage(["admin"]), async (req, res) => {
     const id = req.params.id;
-
+    logger.info(`Deleting ticket with ID: ${id}`);
     try {
         const ticket = await Ticket.findByPk(id);
         if (ticket) {
             await ticket.destroy();
+            logger.info('Ticket deleted successfully');
             return res.status(200).send('Ticket deleted');
         } else {
+            logger.error('Ticket not found');
             return res.status(400).send('Ticket not found');
         }
     } catch (error) {
+        logger.error(`Error deleting ticket: ${error.message}`);
         return res.status(400).send(error);
     }
 });
 
 
-
-
-
-
-
-
-
-
-
-
-
-app.listen(port, () => {
-    console.log(`Order service listening at http://localhost:${port}`)
+sslServer.listen(port, () => {
+    console.log(`Ticket service listening at https://localhost:${port}`)
 });

@@ -7,6 +7,23 @@ const app = express();
 app.use(express.json());
 //to download
 //http proxy middleware
+const https = require('https');
+const path = require('path');
+const fs = require('fs');
+const authenticateToken = require('../CRM-Inventory-CustomerSupport-System/middlewares/authMiddleware')
+const rateLimit = require('../CRM-Inventory-CustomerSupport-System/middlewares/rateLimiterMiddleware')
+const authPage = require('../CRM-Inventory-CustomerSupport-System/middlewares/rbacMiddleware')
+const { validateNewOrdersInput, validateEditOrdersInput, checkValidationResults } = require('../CRM-Inventory-CustomerSupport-System/middlewares/inputValidation');
+const logger = require('../CRM-Inventory-CustomerSupport-System/middlewares/logger');
+const morgan = require('morgan');
+
+const httpsAgent = new https.Agent({  
+    rejectUnauthorized: false
+  });
+const sslServer = https.createServer({
+    key: fs.readFileSync(path.join(__dirname, 'cert', 'key.pem')),
+    cert: fs.readFileSync(path.join(__dirname, 'cert', 'cert.pem')),
+}, app)
 
 const sequelize = new Sequelize('CRM', 'root', 'root', {
     host: 'localhost',
@@ -50,118 +67,170 @@ sequelize.sync({ force: false })
     })
     .catch(error => {'Unable to connect to the database:', error});
 
+// Morgan for request logging
+app.use(morgan('combined', { stream: fs.createWriteStream(path.join(__dirname, 'logs/access.log'), { flags: 'a' }) }));
 
-app.post('/addorder', async (req, res) => {
-    const orderObj = ({
+// Middleware for logging errors and unauthorized access
+app.use((req, res, next) => {
+    logger.info(`Request: ${req.method} ${req.url} - IP: ${req.ip}`);
+    next();
+});
+
+app.post('/addorder', authenticateToken, rateLimit, authPage(["admin", "supplier"]), validateNewOrdersInput, checkValidationResults, async (req, res) => {
+    const orderObj = {
         supplier_id: req.body.supplier_id,
         product_id: req.body.product_id,
         order_quantity: req.body.order_quantity,
-    })
-    //json data
-    // {
-    //     "supplier_id": 1,
-    //     "product_id": 1,
-    //     "order_quantity": 100
-    // }
-    console.log(orderObj);
-    try{
-        const product = await axios.get(`http://localhost:3002/products/${orderObj.product_id}`);
-        if (!product.data) {
-            res.status(400).json({ message: 'Product not found' });
+    };
+    const token = req.headers.authorization;
+    logger.info(`POST /addorder - Payload: ${JSON.stringify(orderObj)}`);
+    
+    try {
+        if (!token) {
+            logger.warn('Authorization token is missing');
+            return res.status(401).json({ error: 'Authorization token is missing' });
         }
-        const user = await axios.get(`http://localhost:3001/users/${orderObj.supplier_id}`);
-        if (!user.data) {
-            res.status(400).json({ message: 'Supplier not found' });
-        }
-        const addinventory = await axios.post('http://localhost:3004/addinventory', {
-            product_id: orderObj.product_id,
-            quantity: orderObj.order_quantity
-        });
 
-        if(addinventory.status === 200){
+        const headers = { Authorization: token };
+        const product = await axios.get(`https://localhost:3002/product/${orderObj.product_id}`, { headers, httpsAgent });
+        if (!product.data) {
+            logger.warn(`Product with ID ${orderObj.product_id} not found`);
+            return res.status(400).json({ message: 'Product not found' });
+        }
+        const user = await axios.get(`https://localhost:3001/user/${orderObj.supplier_id}`, { headers, httpsAgent });
+        if (!user.data) {
+            logger.warn(`Supplier with ID ${orderObj.supplier_id} not found`);
+            return res.status(400).json({ message: 'Supplier not found' });
+        }
+        const addinventory = await axios.post('https://localhost:3004/addinventory', {
+            product_id: orderObj.product_id,
+            quantity: orderObj.order_quantity,
+        }, { headers, httpsAgent });
+
+        if (addinventory.status === 200) {
             const order = await Order.create(orderObj);
-            res.status(200).json({order: order, updatedInventory: addinventory.data});
+            logger.info(`Order created successfully: ${JSON.stringify(order)}`);
+            res.status(200).json({ order: order, updatedInventory: addinventory.data });
         } else {
+            logger.warn('Inventory not added');
             res.status(400).json({ message: 'Inventory not added' });
         }
     } catch (error) {
-        res.status(400).json({message: 'Error creating order'});
+        logger.error(`Error creating order: ${error.message}`);
+        logger.error(error.stack);  // Log the full stack trace
+        res.status(400).json({ message: 'Error creating order', error: error.message });
     }
-
 });
 
-app.get('/orders', async (req, res) => {
+app.get('/all', authenticateToken, rateLimit, authPage(["admin", "supplier"]), async (req, res) => {
+    logger.info('GET /all - Fetching all orders');
     try {
         const orders = await Order.findAll();
-        return res.status(200).json(orders);
+        logger.info(`Fetched ${orders.length} orders`);
+        res.status(200).json(orders);
     } catch (error) {
-        return res.status(400).send(error);
+        logger.error(`Error fetching orders: ${error.message}`);
+        res.status(400).json({ error: 'Error fetching orders' });
     }
 });
 
-app.get('/orders/:id', async (req, res) => {
+app.get('/order/:id', authenticateToken, rateLimit, authPage(["admin", "supplier"]), async (req, res) => {
     const id = req.params.id;
+    const token = req.headers.authorization;
+    logger.info(`GET /order/${id} - Fetching order details`);
+
     try {
+        if (!token) {
+            logger.warn('Authorization token is missing');
+            return res.status(401).json({ error: 'Authorization token is missing' });
+        }
+
+        const headers = { Authorization: token };
         const order = await Order.findByPk(id);
-        const product = await axios.get(`http://localhost:3002/products/${order.product_id}`);
-        const supplier = await axios.get(`http://localhost:3001/users/${order.supplier_id}`);
+        if (!order) {
+            logger.warn(`Order with ID ${id} not found`);
+            return res.status(404).send('Order not found');
+        }
+
+        const product = await axios.get(`https://localhost:3002/products/${order.product_id}`, { headers, httpsAgent });
+        const supplier = await axios.get(`https://localhost:3001/users/${order.supplier_id}`, { headers, httpsAgent });
+
         order.dataValues.product = product.data;
         order.dataValues.supplier = supplier.data;
-        return res.status(200).json({order: order.dataValues});
+
+        logger.info(`Order details fetched: ${JSON.stringify(order.dataValues)}`);
+        res.status(200).json({ order: order.dataValues });
     } catch (error) {
-        return res.status(400).send(error)
+        logger.error(`Error fetching order with ID ${id}: ${error.message}`);
+        res.status(400).send(error);
     }
 });
 
-app.put('/orders/:id', async (req, res) => {
+
+app.put('/order/:id', authenticateToken, rateLimit, authPage(["admin", "supplier"]), validateEditOrdersInput, checkValidationResults, async (req, res) => {
     const id = req.params.id;
-    const orderObj = ({
+    const orderObj = {
         supplier_id: req.body.supplier_id,
         product_id: req.body.product_id,
-        order_quantity: req.body.order_quantity
-    });
-    //json data
-    // {
-    //     "supplier_id": 1,
-    //     "product_id": 1,
-    //     "order_quantity": 100
-    // }
+        order_quantity: req.body.order_quantity,
+    };
+    const token = req.headers.authorization;
+    logger.info(`PUT /order/${id} - Payload: ${JSON.stringify(orderObj)}`);
+
     try {
-        const supplier = await axios.get(`http://localhost:3001/users/${orderObj.supplier_id}`);
+        if (!token) {
+            logger.warn('Authorization token is missing');
+            return res.status(401).json({ error: 'Authorization token is missing' });
+        }
+
+        const headers = { Authorization: token };
+        const supplier = await axios.get(`https://localhost:3001/users/${orderObj.supplier_id}`, { headers, httpsAgent });
         if (!supplier.data) {
+            logger.warn(`Supplier with ID ${orderObj.supplier_id} not found`);
             return res.status(400).json({ message: 'Supplier not found' });
         }
-        const product = await axios.get(`http://localhost:3002/products/${orderObj.product_id}`);
+        const product = await axios.get(`https://localhost:3002/products/${orderObj.product_id}`, { headers, httpsAgent });
         if (!product.data) {
+            logger.warn(`Product with ID ${orderObj.product_id} not found`);
             return res.status(400).json({ message: 'Product not found' });
         }
+
         const order = await Order.findByPk(id);
-        if(order) {
-            order.supplier_id = orderObj.supplier_id;
-            order.product_id = orderObj.product_id;
-            order.order_quantity = orderObj.order_quantity;
+        if (order) {
+            if (orderObj.supplier_id) order.supplier_id = orderObj.supplier_id;
+            if (orderObj.product_id) order.product_id = orderObj.product_id;
+            if (orderObj.order_quantity) order.order_quantity = orderObj.order_quantity;
+
             await order.save();
-            return res.status(200).json(order);
+            logger.info(`Order with ID ${id} updated: ${JSON.stringify(order)}`);
+            res.status(200).json(order);
         } else {
-            return res.status(400).send('Order not found');
+            logger.warn(`Order with ID ${id} not found`);
+            res.status(404).send('Order not found');
         }
     } catch (error) {
-        return res.status(400).send(error);
+        logger.error(`Error updating order with ID ${id}: ${error.message}`);
+        res.status(400).send(error);
     }
 });
 
-app.delete('/orders/:id', async (req, res) => {
+app.delete('/order/:id', authenticateToken, rateLimit, authPage(["admin", "supplier"]), async (req, res) => {
     const id = req.params.id;
+    logger.info(`DELETE /order/${id} - Attempting to delete order`);
+
     try {
         const order = await Order.findByPk(id);
         if (order) {
             await order.destroy();
-            return res.status(200).send('Order deleted');
+            logger.info(`Order with ID ${id} deleted`);
+            res.status(200).send('Order deleted');
         } else {
-            return res.status(400).send('Order not found');
+            logger.warn(`Order with ID ${id} not found`);
+            res.status(404).send('Order not found');
         }
     } catch (error) {
-        return res.status(400).send(error);
+        logger.error(`Error deleting order with ID ${id}: ${error.message}`);
+        res.status(400).send(error);
     }
 });
 
@@ -171,6 +240,6 @@ app.delete('/orders/:id', async (req, res) => {
 
 
 
-app.listen(port, () => {
+sslServer.listen(port, () => {
     console.log(`Order service listening at http://localhost:${port}`)
 });

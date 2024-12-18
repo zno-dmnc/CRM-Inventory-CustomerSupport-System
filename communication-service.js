@@ -8,6 +8,25 @@ app.use(express.json());
 //to download
 //http proxy middleware
 
+const https = require('https');
+const path = require('path');
+const fs = require('fs');
+const authenticateToken = require('../CRM-Inventory-CustomerSupport-System/middlewares/authMiddleware')
+const rateLimit = require('../CRM-Inventory-CustomerSupport-System/middlewares/rateLimiterMiddleware')
+const authPage = require('../CRM-Inventory-CustomerSupport-System/middlewares/rbacMiddleware')
+const { validateCommunicationInput, validateCommunicationEdit, checkValidationResults } = require('../CRM-Inventory-CustomerSupport-System/middlewares/inputValidation');
+const logger = require('../CRM-Inventory-CustomerSupport-System/middlewares/logger');
+const morgan = require('morgan')
+
+const httpsAgent = new https.Agent({
+    rejectUnauthorized: false, // Allow self-signed certificates
+});
+
+const sslServer = https.createServer({
+    key: fs.readFileSync(path.join(__dirname, 'cert', 'key.pem')),
+    cert: fs.readFileSync(path.join(__dirname, 'cert', 'cert.pem')),
+}, app)
+
 const sequelize = new Sequelize('CRM', 'root', 'root', {
     host: 'localhost',
     dialect: 'mysql'
@@ -51,118 +70,152 @@ sequelize.sync({ force: false })
         console.error('Unable to connect to the database:', error);
     });
 
+// Morgan for request logging
+app.use(morgan('combined', { stream: fs.createWriteStream(path.join(__dirname, 'logs/access.log'), { flags: 'a' }) }));
 
-app.post('/addcomms', async (req, res) => {
+// Middleware for logging errors and unauthorized access
+app.use((req, res, next) => {
+    logger.info(`Request: ${req.method} ${req.url} - IP: ${req.ip}`);
+    next();
+});
+
+app.post('/addcomms', authenticateToken, rateLimit, authPage(["admin", "agent", "customer"]), validateCommunicationInput, checkValidationResults, async (req, res) => {
     const comObj = ({
         ticket_id: req.body.ticket_id,
         user_id: req.body.user_id,
         message: req.body.message
-    })
-    //json data
-    // {
-    //     "ticket_id": 1,
-    //     "user_id": 1,
-    //     "message": "Hello"
-    // }
+    });
+    const token = req.headers.authorization;
+    if (!token) {
+        logger.error('Authorization token is missing');
+        return res.status(401).json({ error: 'Authorization token is missing' });
+    }
 
-    //check user id if exists
-    //check ticket id if exists
-    //check if ticket is open
-    //check if user_id is equal to support_id or user_id
+    logger.info(`Adding communication for ticket_id: ${comObj.ticket_id}, user_id: ${comObj.user_id}`);
 
-    const user = await axios.get(`http://localhost:3001/users/${comObj.user_id}`);
-    const ticket = await axios.get(`http://localhost:3006/tickets/${comObj.ticket_id}`);
-    if(!ticket.data){
-        console.log("ticket data", ticket.data);
-        res.status(404).send('Ticket not found');
+    const headers = {
+        Authorization: token,
+    };
+
+    const user = await axios.get(`https://localhost:3001/user/${comObj.user_id}`, { headers, httpsAgent });
+    const ticket = await axios.get(`https://localhost:3006/ticket/${comObj.ticket_id}`, { headers, httpsAgent });
+    
+    if (!ticket.data) {
+        logger.error('Ticket not found');
+        return res.status(404).send('Ticket not found');
     }
-    if(!user.data){
-        console.log("user data", user.data);
-        res.status(404).send('User not found');
+    if (!user.data) {
+        logger.error('User not found');
+        return res.status(404).send('User not found');
     }
-    if(ticket.data.status != 'open'){
-        res.status(400).send('Ticket is closed');
+    if (ticket.data.status != 'open') {
+        logger.error('Ticket is closed');
+        return res.status(400).send('Ticket is closed');
     }
-    if(user.data.user_id != ticket.data.user_id && user.data.user_id != ticket.data.support_id){
-        res.status(400).send('User not authorized');
+    if (user.data.user_id != ticket.data.user_id && user.data.user_id != ticket.data.support_id) {
+        logger.error('User not authorized');
+        return res.status(400).send('User not authorized');
     }
-    try{
+
+    try {
         const comm = await Communication.create(comObj);
+        logger.info(`Communication added: ${comm.communication_id}`);
         res.status(200).json(comm);
-    } catch (error){
+    } catch (error) {
+        logger.error('Error adding communication', error);
         res.status(400).send('Error');
     }
 });
 
 
 //get communications by tickets
-app.get('/comms/:ticket_id', async (req, res) => {
+app.get('/comms/:ticket_id', authenticateToken, rateLimit, authPage(["admin", "agent", "customer"]), async (req, res) => {
     const ticket_id = req.params.ticket_id;
+    logger.info(`Fetching communications for ticket_id: ${ticket_id}`);
     try {
         const comms = await Communication.findAll({ where: { ticket_id: ticket_id } });
+        logger.info(`Communications fetched: ${comms.length} found`);
         return res.status(200).json(comms);
     } catch (error) {
+        logger.error('Error fetching communications', error);
         return res.status(400).send(error);
     }
 });
 
-app.get('/comms', async (req, res) => {
+app.get('/all', authenticateToken, rateLimit, authPage(["admin"]), async (req, res) => {
+    logger.info('Fetching all communications');
     try {
         const comms = await Communication.findAll();
+        logger.info(`Communications fetched: ${comms.length} found`);
         return res.status(200).json(comms);
     } catch (error) {
+        logger.error('Error fetching communications', error);
         return res.status(400).send(error);
     }
 });
 
-app.get('/comms/:id', async (req, res) => {
+app.get('/comms/:id', authenticateToken, rateLimit, authPage(["admin"]), async (req, res) => {
     const id = req.params.id;
+    logger.info(`Fetching communication with id: ${id}`);
     try {
         const comm = await Communication.findByPk(id);
-        return res.status(200).json(comm);
+        if (comm) {
+            logger.info(`Communication found: ${comm.communication_id}`);
+            return res.status(200).json(comm);
+        } else {
+            logger.error('Communication not found');
+            return res.status(400).send('Communication not found');
+        }
     } catch (error) {
+        logger.error('Error fetching communication', error);
         return res.status(400).send(error);
     }
 });
 
-app.put('/comms/:id', async (req, res) => {
+app.put('/comms/:id', authenticateToken, rateLimit, authPage(["admin", "agent", "customer"]), validateCommunicationEdit, checkValidationResults, async (req, res) => {
     const id = req.params.id;
     const message = req.body.message;
 
-    //json data
-    // {
-    //     "message": "Hello"
-    // }
-
+    logger.info(`Updating communication with id: ${id}, new message: ${message}`);
 
     try {
         const comm = await Communication.findByPk(id);
-        comm.message = message;
-        await comm.save();
-        return res.status(200).json(comm);
+        if (comm) {
+            comm.message = message;
+            await comm.save();
+            logger.info(`Communication updated: ${comm.communication_id}`);
+            return res.status(200).json(comm);
+        } else {
+            logger.error('Communication not found');
+            return res.status(400).send('Communication not found');
+        }
     } catch (error) {
+        logger.error('Error updating communication', error);
         return res.status(400).send(error);
     }
 });
 
-app.delete('/comms/:id', async (req, res) => {
+app.delete('/comms/:id', authenticateToken, rateLimit, authPage(["admin", "agent", "customer"]), async (req, res) => {
     const id = req.params.id;
 
+    logger.info(`Deleting communication with id: ${id}`);
+
     try {
         const comm = await Communication.findByPk(id);
-        await comm.destroy();
-        return res.status(200).send('Communication deleted');
+        if (comm) {
+            await comm.destroy();
+            logger.info(`Communication deleted: ${id}`);
+            return res.status(200).send('Communication deleted');
+        } else {
+            logger.error('Communication not found');
+            return res.status(400).send('Communication not found');
+        }
     } catch (error) {
+        logger.error('Error deleting communication', error);
         return res.status(400).send(error);
     }
 });
 
-
-
-
-
-
-
-app.listen(port, () => {
-    console.log(`Order service listening at http://localhost:${port}`)
+sslServer.listen(port, () => {
+    console.log(`Communication service listening at https://localhost:${port}`)
 });
